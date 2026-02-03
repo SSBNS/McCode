@@ -55,8 +55,8 @@
 * E0:          [meV]     Lower edge of energy distribution
 * E1:          [meV]     Upper edge of energy distribution
 * modPosition: [int]     Defines the initial surface for neutron distribution production. Possible values = 0 (at moderator) or 1 (at shutter insert)
-* xw:          [m]       Moderator width
-* yh:          [m]       Moderator height
+* xwidth:      [m]       Moderator width
+* yheigh       [m]       Moderator height
 * focus_xw:    [m]       Width of focusing rectangle
 * focus_yh:    [m]       Height of focusing rectangle
 * dist:        [m]       Distance from source surface to the focusing rectangle
@@ -66,8 +66,8 @@
 * %E
 *******************************************************************************/
 DEFINE COMPONENT ViewModISIS
-SETTING PARAMETERS (string Face="TS1_S04_Merlin.mcstas",E0 , E1, modPosition=0,
-  xw=0.12, yh=0.12, focus_xw=0.094, focus_yh=0.094,
+SETTING PARAMETERS (string Face="TS1_S04_Merlin.mcstas",E0, E1, modPosition=0,
+  xwidth=0.12, yheight=0.12, focus_xw=0.094, focus_yh=0.094,
   dist=1.7, int verbose=0, beamcurrent=1)
 
 SHARE
@@ -134,6 +134,12 @@ double polInterp(double* X,double* Y,int Psize,double Aim)
   double out,errOut;         /* out put variables */
   double *C = malloc(Psize*sizeof(double));
   double *D = malloc(Psize*sizeof(double));
+  if (!C || !D) {
+    #ifndef OPENACC
+    fprintf(stderr,"Error in ISIS_moderator: memory allocation failure. Exit!\n");
+    exit(-1);
+    #endif
+  }
   double testDiff,diff;
 
   double w,den,ho,hp;           /* intermediate variables */
@@ -233,6 +239,10 @@ cmdnumberD(char *mc,double* num)
 	(mc[i]=='\t' || mc[i]==' '  || mc[i]==',');i++);
   if(i==len || !mc[i]) return 0;
   ss=malloc(sizeof(char)*(len+1));
+  if(!ss) {
+    fprintf(stderr,"Error in ISIS_moderator: memory allocation failure. Exit!\n");
+    exit(-1);
+  }
 
   for(;i<len && mc[i]!='\n' && mc[i]
 	&& mc[i]!='\t' && mc[i]!=' ' && mc[i]!=',';i++)
@@ -485,7 +495,7 @@ calcRDum(double* RPts, Source_ViewMod TS)
 } /* calcRDum */
 
 void
-processHeader(FILE* TFile, Source_ViewMod *TS, double modPosition, double xw, double yh)
+processHeader(FILE* TFile, Source_ViewMod *TS, double modPosition, double xwidth, double yheight)
   /*!
     Determine the window and the time offset
     \param TFile :: file [rewound on exit]
@@ -532,8 +542,8 @@ processHeader(FILE* TFile, Source_ViewMod *TS, double modPosition, double xw, do
 	  TS->XAxis=sqrt(TS->XAxis)/100.0;
               if (!modPosition)
                  {
-	          TS->ZAxis=yh;
-	          TS->XAxis=xw;
+	          TS->ZAxis=yheight;
+	          TS->XAxis=xwidth;
                   }
 	  fprintf(stderr,"Time off sec == %g \n",TS->timeOffset);
 	  fprintf(stderr,"mod size z == %g \n",TS->ZAxis);
@@ -549,7 +559,7 @@ processHeader(FILE* TFile, Source_ViewMod *TS, double modPosition, double xw, do
 
 int
 readHtable(FILE* TFile,const double Einit,const double Eend, 
-  Source_ViewMod *TS, double modPosition, double xw, double yh, int verbose)
+  Source_ViewMod *TS, double modPosition, double xwidth, double yheight, int verbose)
 /*!
   Process a general h.o file to create an integrated
   table of results from Einit -> Eend
@@ -575,10 +585,8 @@ readHtable(FILE* TFile,const double Einit,const double Eend,
     Status Flag::
     Ftime=1 :: [time ] Reading Time : Data : Err [Exit on Total]
 
-
-    /*
     Double Read File to determine how many bins and
-    memery size
+    memory size
   */
   if (!TFile) return(0);
   Ea=0.0;
@@ -590,7 +598,7 @@ readHtable(FILE* TFile,const double Einit,const double Eend,
   tIndex=0;
   TS->nTime=0;
   TS->nEnergy=0;
-  processHeader(TFile, TS, modPosition, xw, yh);
+  processHeader(TFile, TS, modPosition, xwidth, yheight);
 
   // Read file and get time bins:
   while(fgets(ss,255,TFile) && Eend>Ea)
@@ -600,6 +608,7 @@ readHtable(FILE* TFile,const double Einit,const double Eend,
 	  DebugCnt++;
           if (!Ftime)
 	    {
+	      // find :: energy bin: <Number> to <Number> 
 	      if (energyBin(ss,Einit,Eend,&Ea,&Eb))
 		{
 		  if (eIndex==0)
@@ -675,7 +684,6 @@ readHtable(FILE* TFile,const double Einit,const double Eend,
 		  tIndex=0;
 		}
 	    }
-
 	  else           // In the time section
 	    {
 	      if (timeEnd(ss))     // Found "total"
@@ -698,7 +706,6 @@ readHtable(FILE* TFile,const double Einit,const double Eend,
 	    }
 	}
     }
-
   TS->EnergyBin[eIndex+1]=Eend;
   TS->Total=Tsum;
 
@@ -842,7 +849,6 @@ void getPoint(double* TV,double* EV,double* lim1, double* lim2, Source_ViewMod T
 
       fprintf(stderr,"TS == %g %g :: %d %d \n",TS.EInt[Epnt-1],TS.EInt[Epnt],iStart,iEnd);
       fprintf(stderr,"Points (%g) == ",R1);
-
       for(i=0;i<iEnd-iStart;i++)
 	fprintf(stderr," %g %g",*(TS.EInt+i+iStart),*(TS.EnergyBin+iStart+i));
       fprintf(stderr,"\n");
@@ -850,7 +856,6 @@ void getPoint(double* TV,double* EV,double* lim1, double* lim2, Source_ViewMod T
     }
   return;
 } /* getPoint */
-
 
 int
 cmdnumberI(char *mc,int* num,const int len)
@@ -874,6 +879,10 @@ cmdnumberI(char *mc,int* num,const int len)
 	(mc[i]=='\t' || mc[i]==' '  || mc[i]==',');i++);
   if(i==len || !mc[i]) return 0;
   ss=malloc(sizeof(char)*(len+1));
+      if (!ss) {
+	fprintf(stderr,"ViewModISIS: malloc() failure in cmdnumberI\n");
+	exit(-1);
+      }
   /*  char *ss=new char[len+1]; */
   for(;i<len && mc[i]!='\n' && mc[i]
 	&& mc[i]!='\t' && mc[i]!=' ' && mc[i]!=',';i++)
@@ -982,6 +991,7 @@ openFile(char* FileName)
   /* If we reach here, the file was not found - raise fatal error */
   fprintf(stderr,"%s - Not found! \nPlease check your McStas installation and/or MCTABLES environment variable!\n",FileName);
   exit(1);
+  return efile;
 } /* openFile */
 
 double strArea(Source_ViewMod TS, double focus_xw, double focus_yh, double dist)
@@ -1069,7 +1079,6 @@ INITIALIZE
 %{
   /* READ IN THE ENERGY FILE */
   FILE* Tfile;
-  
 
   Nsim=mcget_ncount();  // Number of points requested.
 
@@ -1078,7 +1087,7 @@ INITIALIZE
   rtE1=convertEnergy(E1);
   orderEnergy(&rtE0,&rtE1);
 
-  readHtable(Tfile,rtE0,rtE1, &TS, modPosition, xw, yh, verbose);
+  readHtable(Tfile,rtE0,rtE1, &TS, modPosition, xwidth, yheight, verbose);
   fclose(Tfile);
   // Below pragma was needed with PGI 19.x, compilation fails with NVC 20.7 
   //#pragma acc declare create( TS )
@@ -1154,7 +1163,6 @@ TRACE
       fprintf(stderr,"TimeZero[%d]=> %g\n",Ncount,t);
     }
 #endif  
-
 %}
 
 MCDISPLAY

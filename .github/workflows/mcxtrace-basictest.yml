@@ -20,15 +20,8 @@ jobs:
         include:
           - { os: ubuntu-24.04,  CC: gcc-13,   CXX: g++-13,     python: '3.12', mpi: 'openmpi' }
           - { os: ubuntu-24.04,  CC: clang,    CXX: clang++,    python: '3.12', mpi: 'openmpi'   }
-          - { os: ubuntu-22.04,  CC: clang,    CXX: clang++,    python: '3.11', mpi: 'openmpi'  }
-          - { os: ubuntu-22.04,  CC: gcc-12,   CXX: g++-12,     python: '3.11', mpi: 'openmpi'   }
-          - { os: macos-13,      CC: clang,    CXX: clang++,    python: "3.11", mpi: 'mpich'   }
-          - { os: macos-14,      CC: clang,    CXX: clang++,    python: "3.12", mpi: 'mpich'   }
-          - { os: macos-15,      CC: clang,    CXX: clang++,    python: "3.13", mpi: 'mpich'   }
-          - { os: windows-2022,   CC: cl.exe,   CXX: cl.exe,     python: "3.13", mpi: 'msmpi'   }
-          - { os: windows-2022,   CC: gcc.exe,  CXX: g++.exe,    python: "3.13", mpi: 'msmpi'   }
-          - { os: windows-2025,   CC: cl.exe,   CXX: cl.exe,     python: "3.13", mpi: 'msmpi'   }
           - { os: windows-11-arm, CC: cl.exe,   CXX: cl.exe,     python: "3.13", mpi: 'msmpi'   }
+          - { os: windows-latest, CC: gcc.exe,   CXX: g++.exe,     python: "3.13", mpi: 'msmpi'   }
 
     name: ${{ matrix.os }}.${{ matrix.CC }}.${{ matrix.mpi }}.python-${{ matrix.python }}
     runs-on: ${{ matrix.os }}
@@ -404,41 +397,46 @@ jobs:
            export MCXTRACE_EXECUTABLE="mcxtrace"
            export MXRUN_EXECUTABLE="mxrun"
            export MXTEST_EXECUTABLE="mxtest"
+           export PERMISSIVE=" "
            export PATH=${PATH}:${PWD}/install_mcxtrace/bin/:${PWD}/install_mcxtrace/mcxtrace/3.99.99/bin/
            # Check if any instr files were modified during last commit
            cd src
            export CHANGEDCOMPS=`git diff --name-only HEAD HEAD~1| grep \.comp\$ | grep mcxtrace-comps | xargs -n1 basename | sed s/\.comp//g | xargs echo`
            export NUMCHANGEDCOMPS=`git diff --name-only HEAD HEAD~1|grep \.comp\$ | grep mcxtrace-comps | wc -l | xargs echo`
-           export COMPILIST=""
-           export RUNALL="NO"
+           cd -
            if [ "$NUMCHANGEDCOMPS" != "0" ];
            then
-             if [ "$NUMCHANGEDCOMPS" -lt "10" ];
-             then
                for comp in $CHANGEDCOMPS;
                do
-                 echo Finding instruments matching component $comp
-                 MATCH=`find mcxtrace-comps -name \*.instr -exec grep -H ${comp} \{\} \; | cut -f1 -d: | sort | uniq | xargs -n1 basename | sed s/\.instr//g | xargs echo`
-                 export COMPILIST=`echo $COMPILIST $MATCH`
-               done
+                 echo Finding tests including component $comp
+                 NUMMATCH=`find src/mcxtrace-comps -name \*.instr -exec grep -H ${comp} \{\} \; | cut -f1 -d: | sort | uniq | wc -l`
+                 if [ "$NUMMATCH" -gt "0" ];
+                 then
+                   if [ "$RUNNER_OS" != "Windows" ]; then
+                     mxtest --mpi=2 --testdir run_${comp} --comp=${comp} --suffix=${{ matrix.CC }}_CHANGES $PERMISSIVE --verbose
+                 else
+                     echo .\\install\\bin\\mxtest --verbose --testdir run_${comp} --comp=${comp} --suffix=${{ matrix.CC }}_CHANGES --permissive --verbose >> changedinstr.bat
+                 fi
              else
-               export RUNALL="YES"
+                   echo No matching tests found
              fi
+               done
            fi
+           cd src
+           export RUNALL="NO"
            export CHANGEDINSTR=`git diff --name-only HEAD HEAD~1| grep \.instr\$ | grep mcxtrace-comps | xargs -n1 basename | sed s/\.instr//g | xargs echo`
-           export CHANGEDINSTR=`echo $CHANGEDINSTR $COMPILIST | sort | uniq | sed s/\ /,/g`
+           export CHANGEDINSTR=`echo $CHANGEDINSTR | xargs -n1 echo | sort | uniq | xargs echo | sed s/\ /,/g`
            export NUMCHANGEDINSTR=`git diff --name-only HEAD HEAD~1|grep \.instr\$ | grep mcxtrace-comps | wc -l | xargs echo`
            echo ----
            echo $NUMCHANGEDCOMPS components and $NUMCHANGEDINSTR instruments were changed, resulting in this list:
            echo $CHANGEDINSTR
            echo ----
            cd -
-           if [ "$NUMCHANGEDINSTR" -gt "10" ];
+           if [ "$NUMCHANGEDINSTR" -gt "20" ];
            then
              export RUNALL="YES"
            fi
-           export PERMISSIVE=" "
-           if [ "$NUMCHANGEDINSTR" != "0" ] || [ "$NUMCHANGEDCOMPS" != "0" ];
+           if [ "$NUMCHANGEDINSTR" != "0" ];
            then
              if [ "$RUNALL" == "NO" ];
              then
@@ -446,15 +444,12 @@ jobs:
              else
                export SCOPE=" "
              fi
+             mkdir run_mxtest && cd run_mxtest
              if [ "$RUNNER_OS" != "Windows" ]; then
-               mkdir run_mxtest && cd run_mxtest
-               if [ "$RUNNER_OS" == macOS ]; then
-                 export PERMISSIVE="--permissive"
-               fi
-               ../install_mcxtrace/bin/${MXTEST_EXECUTABLE} --testdir $PWD $SCOPE --suffix=CHANGES $PERMISSIVE
+               mxtest --mpi=2 --testdir $PWD $SCOPE --suffix=${{ matrix.CC }}_CHANGES $PERMISSIVE
                mxviewtest --nobrowse $PWD
              else
-               echo ..\\install\\bin\\mxtest --verbose --testdir=. $SCOPE --suffix=CHANGES --permissive > changedinstr.bat
+               echo .\\install\\bin\\mxtest --verbose --testdir=run_mxtest $SCOPE --suffix=${{ matrix.CC }}_CHANGES --permissive >> ..\\changedinstr.bat
              fi
            fi
 
@@ -466,9 +461,7 @@ jobs:
       shell: cmd
       run: |
         if exist changedinstr.bat (
-          mkdir run_mxtest
-          cd run_mxtest
-          call ..\changedinstr.bat
+          call .\changedinstr.bat
         )
 
     # Start of Windows tests
@@ -534,6 +527,8 @@ jobs:
            set -e
            set -u
            set -x
+           # Clear out binaries from sim dir and tar up artifact
+           ls | grep run_ | xargs -n1 ./src/devel/bin/mccode-simdir-cleanfiles -d 
            tar cvfz mcxtrace-${{ matrix.os }}.${{ matrix.CC }}.${{ matrix.mpi }}.python-${{ matrix.python }}_output.tgz run_*
 
     - name: 'Upload Artifact'
